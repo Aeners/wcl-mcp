@@ -1,0 +1,31 @@
+{
+  "season": "The War Within - Season 2",
+  "updated": "2026-04-17",
+  "raid": {
+    "name": "Liberation of Undermine",
+    "zoneID": 42,
+    "encounters": [
+      { "name": "Vexie and the Geargrinders", "encounterID": 3009 },
+      { "name": "Cauldron of Carnage", "encounterID": 3010 },
+      { "name": "Rik Reverb", "encounterID": 3011 },
+      { "name": "Stix Bunkjunker", "encounterID": 3012 },
+      { "name": "Lockenstock", "encounterID": 3013 },
+      { "name": "Sprocketmonger Lockenstock", "encounterID": 3014 },
+      { "name": "The One-Armed Bandit", "encounterID": 3015 },
+      { "name": "Mug'Zee, Heads of Security", "encounterID": 3016 },
+      { "name": "Gallywix", "encounterID": 3017 }
+    ]
+  },
+  "mythicPlus": {
+    "dungeons": [
+      { "name": "Ara-Kara, City of Echoes", "zoneID": 12660 },
+      { "name": "Cinderbrew Meadery", "zoneID": 12669 },
+      { "name": "Darkflame Cleft", "zoneID": 12662 },
+      { "name": "The MOTHERLODE!!", "zoneID": 12669 },
+      { "name": "Priory of the Sacred Flame", "zoneID": 12663 },
+      { "name": "The Rookery", "zoneID": 12664 },
+      { "name": "Theater of Pain", "zoneID": 12841 },
+      { "name": "Operation: Floodgate", "zoneID": 13346 }
+    ]
+  }
+}
