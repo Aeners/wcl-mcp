@@ -104,8 +104,8 @@ export async function handleSetActiveCharacter(
 
     if (error instanceof WCLError) {
       if (error.code === 'auth_failure') return authFailure();
-      if (error.code === 'service_unavailable') return serviceUnavailable();
+      if (error.code === 'service_unavailable') return serviceUnavailable(error.message);
     }
-    return serviceUnavailable();
+    return serviceUnavailable(String(error));
   }
 }

@@ -32,11 +32,14 @@ export function authFailure(): ToolError {
   );
 }
 
-export function serviceUnavailable(): ToolError {
+export function serviceUnavailable(detail?: string): ToolError {
+  const message = detail
+    ? `WCL API error: ${detail}`
+    : 'WCL API is currently unreachable.';
   return makeError(
     'service_unavailable',
-    'WCL API is currently unreachable.',
-    'WCL may be experiencing downtime. This is usually temporary. Try again in a few minutes.',
+    message,
+    'WCL may be experiencing downtime, or there may be an authentication issue. Check that WCL_CLIENT_ID and WCL_CLIENT_SECRET are correct. Try again in a few minutes.',
   );
 }
 

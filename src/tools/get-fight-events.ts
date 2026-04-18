@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { WCLClient, WCLError } from '../wcl/client.js';
-import { FIGHT_SUMMARY_QUERY, FIGHT_EVENTS_QUERY } from '../wcl/queries.js';
+import { FIGHT_EVENTS_QUERY } from '../wcl/queries.js';
 import { logger } from '../utils/logger.js';
 import { authFailure, serviceUnavailable, type ToolError } from '../formatters/common.js';
 
@@ -8,8 +8,8 @@ export const getFightEventsSchema = z.object({
   report_code: z.string().describe('WCL report code'),
   fight_id: z.number().describe('Fight ID'),
   event_type: z.enum(['casts', 'damage-done', 'damage-taken', 'healing', 'buffs', 'debuffs', 'deaths']).optional().describe('Event type filter'),
-  source_name: z.string().optional().describe('Filter by source player name'),
-  target_name: z.string().optional().describe('Filter by target name'),
+  source_name: z.string().optional().describe('Filter by source player name (client-side filter)'),
+  target_name: z.string().optional().describe('Filter by target name (client-side filter)'),
   ability_id: z.number().optional().describe('Filter by ability ID'),
 });
 
@@ -26,6 +26,29 @@ const EVENT_TYPE_MAP: Record<string, string> = {
   'deaths': 'Deaths',
 };
 
+// Lightweight query to get fight timing + actor name mapping
+const FIGHT_META_QUERY = `
+query FightMeta($code: String!, $fightIDs: [Int]!) {
+  reportData {
+    report(code: $code) {
+      fights(fightIDs: $fightIDs) {
+        id
+        name
+        startTime
+        endTime
+      }
+      masterData {
+        actors {
+          id
+          name
+          type
+        }
+      }
+    }
+  }
+}
+`;
+
 export async function handleGetFightEvents(
   client: WCLClient,
   args: GetFightEventsArgs,
@@ -39,16 +62,16 @@ export async function handleGetFightEvents(
   });
 
   try {
-    // First, get fight timing info
+    // Get fight timing and actor name map (lightweight query, no table data)
     const fightData = await client.query<{
       reportData: {
         report: {
           fights: Array<{ id: number; name: string; startTime: number; endTime: number }>;
-          masterData: { actors: Array<{ id: number; name: string; type: string; subType: string; icon: string }> };
+          masterData: { actors: Array<{ id: number; name: string; type: string }> };
         };
       };
     }>(
-      FIGHT_SUMMARY_QUERY,
+      FIGHT_META_QUERY,
       { code: args.report_code, fightIDs: [args.fight_id] },
     );
 
@@ -62,25 +85,12 @@ export async function handleGetFightEvents(
       } as ToolError;
     }
 
-    // Resolve source/target names to IDs
-    let sourceID: number | undefined;
-    let targetID: number | undefined;
+    // Build actor ID->name map for enriching events later
+    const actorMap = new Map(report.masterData.actors.map(a => [a.id, a.name]));
 
-    if (args.source_name) {
-      const actor = report.masterData.actors.find(
-        a => a.name.toLowerCase() === args.source_name!.toLowerCase()
-      );
-      if (actor) sourceID = actor.id;
-    }
-
-    if (args.target_name) {
-      const actor = report.masterData.actors.find(
-        a => a.name.toLowerCase() === args.target_name!.toLowerCase()
-      );
-      if (actor) targetID = actor.id;
-    }
-
-    // Build events query variables
+    // Fetch events -- don't use sourceID/targetID params because
+    // masterData actor IDs and event sourceIDs use different ID spaces.
+    // We filter client-side instead.
     const variables: Record<string, unknown> = {
       code: args.report_code,
       fightID: args.fight_id,
@@ -89,15 +99,13 @@ export async function handleGetFightEvents(
     };
 
     if (args.event_type) variables.dataType = EVENT_TYPE_MAP[args.event_type];
-    if (sourceID !== undefined) variables.sourceID = sourceID;
-    if (targetID !== undefined) variables.targetID = targetID;
     if (args.ability_id) variables.abilityID = args.ability_id;
 
     const eventsData = await client.query<{
       reportData: {
         report: {
           events: {
-            data: unknown[];
+            data: Array<Record<string, unknown>>;
             nextPageTimestamp: number | null;
           };
         };
@@ -107,7 +115,28 @@ export async function handleGetFightEvents(
       variables,
     );
 
-    const events = eventsData.reportData.report.events;
+    let events = eventsData.reportData.report.events.data;
+
+    // Enrich events with actor names
+    events = events.map(e => ({
+      ...e,
+      sourceName: actorMap.get(e.sourceID as number),
+      targetName: actorMap.get(e.targetID as number),
+    }));
+
+    // Client-side filtering by source/target name
+    if (args.source_name) {
+      const filterName = args.source_name.toLowerCase();
+      events = events.filter(e =>
+        (e.sourceName as string)?.toLowerCase() === filterName
+      );
+    }
+    if (args.target_name) {
+      const filterName = args.target_name.toLowerCase();
+      events = events.filter(e =>
+        (e.targetName as string)?.toLowerCase() === filterName
+      );
+    }
 
     logger.toolResult('get_fight_events', { success: true, latencyMs: Date.now() - startTime });
 
@@ -116,10 +145,10 @@ export async function handleGetFightEvents(
       fightId: args.fight_id,
       fightName: fight.name,
       eventType: args.event_type ?? 'all',
-      eventCount: events.data.length,
-      hasMore: events.nextPageTimestamp !== null,
-      nextPageTimestamp: events.nextPageTimestamp,
-      events: events.data,
+      eventCount: events.length,
+      hasMore: eventsData.reportData.report.events.nextPageTimestamp !== null,
+      nextPageTimestamp: eventsData.reportData.report.events.nextPageTimestamp,
+      events,
     };
   } catch (error) {
     const latencyMs = Date.now() - startTime;
@@ -127,6 +156,6 @@ export async function handleGetFightEvents(
     if (error instanceof WCLError) {
       if (error.code === 'auth_failure') return authFailure();
     }
-    return serviceUnavailable();
+    return serviceUnavailable(String(error));
   }
 }

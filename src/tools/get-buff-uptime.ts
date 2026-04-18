@@ -1,15 +1,15 @@
 import { z } from 'zod';
 import { WCLClient, WCLError } from '../wcl/client.js';
-import { FIGHT_TABLE_QUERY, type WCLTableEntry } from '../wcl/queries.js';
+import { FIGHT_TABLE_QUERY } from '../wcl/queries.js';
 import { fightTableKey } from '../session/cache.js';
 import { logger } from '../utils/logger.js';
-import { formatBuffTable, type BuffUptimeEntry } from '../formatters/buffs.js';
+import { formatBuffAuras, type AuraEntry, type WCLAura } from '../formatters/buffs.js';
 import { authFailure, serviceUnavailable, type ToolError } from '../formatters/common.js';
 
 export const getBuffUptimeSchema = z.object({
   report_code: z.string().describe('WCL report code'),
   fight_ids: z.array(z.number()).min(1).describe('Fight IDs to analyze'),
-  player_name: z.string().optional().describe('Filter to a specific player'),
+  player_name: z.string().optional().describe('Filter to a specific player (note: Buffs table is not per-player in WCL)'),
   buff_type: z.enum(['buffs', 'debuffs', 'both']).optional().default('both').describe('Type of buffs to fetch'),
 });
 
@@ -19,7 +19,7 @@ interface BuffUptimeResult {
   reportCode: string;
   fightIds: number[];
   buffType: string;
-  entries: BuffUptimeEntry[];
+  auras: AuraEntry[];
 }
 
 export async function handleGetBuffUptime(
@@ -27,47 +27,42 @@ export async function handleGetBuffUptime(
   args: GetBuffUptimeArgs,
 ): Promise<BuffUptimeResult | ToolError> {
   const startTime = Date.now();
-  logger.toolCall('get_buff_uptime', { report_code: args.report_code, fight_ids: args.fight_ids, player_name: args.player_name, buff_type: args.buff_type });
+  logger.toolCall('get_buff_uptime', { report_code: args.report_code, fight_ids: args.fight_ids, buff_type: args.buff_type });
 
   try {
     const buffType = args.buff_type ?? 'both';
-    const allEntries: BuffUptimeEntry[] = [];
+    const allAuras: AuraEntry[] = [];
 
     if (buffType === 'buffs' || buffType === 'both') {
       const cacheKey = fightTableKey(args.report_code, args.fight_ids[0], `Buffs:${args.fight_ids.join(',')}`);
       const data = await client.query<{
-        reportData: { report: { table: { data: { entries: WCLTableEntry[]; totalTime: number } } } }
+        reportData: { report: { table: { data: { auras: WCLAura[]; totalTime: number } } } }
       }>(
         FIGHT_TABLE_QUERY,
         { code: args.report_code, fightIDs: args.fight_ids, dataType: 'Buffs' },
         cacheKey,
       );
       const tableData = data.reportData.report.table.data;
-      allEntries.push(...formatBuffTable(tableData.entries, tableData.totalTime, args.player_name));
+      const formatted = formatBuffAuras(tableData.auras ?? [], tableData.totalTime);
+      allAuras.push(...formatted.auras);
     }
 
     if (buffType === 'debuffs' || buffType === 'both') {
       const cacheKey = fightTableKey(args.report_code, args.fight_ids[0], `Debuffs:${args.fight_ids.join(',')}`);
       const data = await client.query<{
-        reportData: { report: { table: { data: { entries: WCLTableEntry[]; totalTime: number } } } }
+        reportData: { report: { table: { data: { auras: WCLAura[]; totalTime: number } } } }
       }>(
         FIGHT_TABLE_QUERY,
         { code: args.report_code, fightIDs: args.fight_ids, dataType: 'Debuffs' },
         cacheKey,
       );
       const tableData = data.reportData.report.table.data;
-      const debuffEntries = formatBuffTable(tableData.entries, tableData.totalTime, args.player_name);
-
-      // Merge debuff entries with existing buff entries for the same player
-      for (const debuffEntry of debuffEntries) {
-        const existing = allEntries.find(e => e.playerName === debuffEntry.playerName);
-        if (existing) {
-          existing.buffs.push(...debuffEntry.buffs);
-        } else {
-          allEntries.push(debuffEntry);
-        }
-      }
+      const formatted = formatBuffAuras(tableData.auras ?? [], tableData.totalTime);
+      allAuras.push(...formatted.auras);
     }
+
+    // Sort all auras by uptime descending
+    allAuras.sort((a, b) => b.uptimePct - a.uptimePct);
 
     logger.toolResult('get_buff_uptime', { success: true, latencyMs: Date.now() - startTime });
 
@@ -75,7 +70,7 @@ export async function handleGetBuffUptime(
       reportCode: args.report_code,
       fightIds: args.fight_ids,
       buffType,
-      entries: allEntries,
+      auras: allAuras,
     };
   } catch (error) {
     const latencyMs = Date.now() - startTime;
@@ -83,6 +78,6 @@ export async function handleGetBuffUptime(
     if (error instanceof WCLError) {
       if (error.code === 'auth_failure') return authFailure();
     }
-    return serviceUnavailable();
+    return serviceUnavailable(String(error));
   }
 }

@@ -138,8 +138,8 @@ export async function handleGetRecentReports(
     logger.toolResult('get_recent_reports', { success: false, latencyMs, error: String(error) });
     if (error instanceof WCLError) {
       if (error.code === 'auth_failure') return authFailure();
-      if (error.code === 'service_unavailable') return serviceUnavailable();
+      if (error.code === 'service_unavailable') return serviceUnavailable(error.message);
     }
-    return serviceUnavailable();
+    return serviceUnavailable(String(error));
   }
 }

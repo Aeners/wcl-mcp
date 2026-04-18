@@ -75,6 +75,6 @@ export async function handleGetCombatantInfo(
     if (error instanceof WCLError) {
       if (error.code === 'auth_failure') return authFailure();
     }
-    return serviceUnavailable();
+    return serviceUnavailable(String(error));
   }
 }

@@ -34,6 +34,13 @@ try { (await import('dotenv')).config(); } catch {}
 const WCL_CLIENT_ID = process.env.WCL_CLIENT_ID;
 const WCL_CLIENT_SECRET = process.env.WCL_CLIENT_SECRET;
 
+logger.info('Credential check', {
+  hasClientId: !!WCL_CLIENT_ID,
+  clientIdLength: WCL_CLIENT_ID?.length ?? 0,
+  hasClientSecret: !!WCL_CLIENT_SECRET,
+  clientSecretLength: WCL_CLIENT_SECRET?.length ?? 0,
+});
+
 if (!WCL_CLIENT_ID || !WCL_CLIENT_SECRET) {
   logger.error('Missing WCL_CLIENT_ID or WCL_CLIENT_SECRET environment variables');
   process.exit(1);

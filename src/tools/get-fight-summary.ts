@@ -144,8 +144,8 @@ export async function handleGetFightSummary(
     logger.toolResult('get_fight_summary', { success: false, latencyMs, error: String(error) });
     if (error instanceof WCLError) {
       if (error.code === 'auth_failure') return authFailure();
-      if (error.code === 'service_unavailable') return serviceUnavailable();
+      if (error.code === 'service_unavailable') return serviceUnavailable(error.message);
     }
-    return serviceUnavailable();
+    return serviceUnavailable(String(error));
   }
 }
