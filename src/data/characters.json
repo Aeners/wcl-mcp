@@ -1,0 +1,13 @@
+{
+  "characters": [
+    { "name": "Aeners", "realm": "Archimonde", "region": "eu", "class": "Hunter", "mine": true },
+    { "name": "Aenoce", "realm": "Archimonde", "region": "eu", "class": "Monk", "mine": true },
+    { "name": "Boulgourvil", "realm": "Archimonde", "region": "eu", "class": "Druid", "mine": true },
+    { "name": "Hyota", "realm": "Medivh", "region": "eu", "class": "Warrior", "mine": true },
+    { "name": "Prepacode", "realm": "Archimonde", "region": "eu", "class": "Warlock", "mine": true },
+    { "name": "Rigged", "realm": "Archimonde", "region": "eu", "class": "Priest", "mine": true },
+    { "name": "Sreneasse", "realm": "Archimonde", "region": "eu", "class": "Mage", "mine": true },
+    { "name": "Æners", "realm": "Archimonde", "region": "eu", "class": "Paladin", "mine": true },
+    { "name": "Étau", "realm": "Archimonde", "region": "eu", "class": "Shaman", "mine": true }
+  ]
+}
