@@ -33,10 +33,10 @@ query RecentReports($name: String!, $serverSlug: String!, $serverRegion: String!
 `;
 
 export const FIGHT_TABLE_QUERY = `
-query FightTable($code: String!, $fightIDs: [Int]!, $dataType: TableDataType!) {
+query FightTable($code: String!, $fightIDs: [Int]!, $dataType: TableDataType!, $startTime: Float, $endTime: Float) {
   reportData {
     report(code: $code) {
-      table(dataType: $dataType, fightIDs: $fightIDs)
+      table(dataType: $dataType, fightIDs: $fightIDs, startTime: $startTime, endTime: $endTime)
     }
   }
 }

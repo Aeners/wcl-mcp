@@ -432,6 +432,55 @@ describe('Tool Integration Tests', () => {
     });
   });
 
+  describe('time windows', () => {
+    it('scopes a damage table to the first 60 seconds', async () => {
+      const full = await handleGetFightDamage(client, {
+        report_code: reportCode,
+        fight_ids: [fightId],
+      }) as { totalTime: number; entries: Array<{ name: string; totalDamage: number }> };
+
+      const firstMinute = await handleGetFightDamage(client, {
+        report_code: reportCode,
+        fight_ids: [fightId],
+        start_time_s: 0,
+        end_time_s: 60,
+      }) as { totalTime: number; entries: Array<{ name: string; totalDamage: number }> };
+
+      expect(firstMinute.entries.length).toBeGreaterThan(0);
+      expect(firstMinute.totalTime).toBeLessThanOrEqual(full.totalTime);
+
+      // A sub-window cannot contain more damage than the whole fight.
+      const sum = (es: Array<{ totalDamage: number }>) => es.reduce((a, e) => a + e.totalDamage, 0);
+      expect(sum(firstMinute.entries)).toBeLessThan(sum(full.entries));
+    }, 20_000);
+
+    it('scopes events to the window, relative to the pull', async () => {
+      const result = await handleGetFightEvents(client, {
+        report_code: reportCode,
+        fight_id: fightId,
+        event_type: 'casts',
+        start_time_s: 0,
+        end_time_s: 30,
+      }) as { events: Array<{ relativeTime: number }>; window?: unknown };
+
+      expect(result.window).toBeTruthy();
+      expect(result.events.length).toBeGreaterThan(0);
+      expect(result.events.every(e => e.relativeTime >= 0 && e.relativeTime <= 30)).toBe(true);
+    }, 20_000);
+
+    it('refuses a window across several fights', async () => {
+      const result = await handleGetFightDamage(client, {
+        report_code: reportCode,
+        fight_ids: fightIds.length > 1 ? fightIds : [fightId, fightId + 1],
+        start_time_s: 0,
+        end_time_s: 60,
+      });
+
+      expect(isError(result)).toBe(true);
+      if (isError(result)) expect(result.error).toBe('window_needs_single_fight');
+    });
+  });
+
   // --- get_fight_events ---
 
   describe('get_fight_events', () => {

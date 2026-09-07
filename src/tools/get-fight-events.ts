@@ -3,6 +3,7 @@ import { WCLClient, WCLError } from '../wcl/client.js';
 import { FIGHT_EVENTS_QUERY } from '../wcl/queries.js';
 import { withAbilityNames, withRelativeTime, type RawEvent } from '../formatters/events.js';
 import { resolveActorId, suggestActorNames } from '../wcl/actors.js';
+import { computeWindow, isToolError } from '../wcl/window.js';
 import { logger } from '../utils/logger.js';
 import { authFailure, serviceUnavailable, type ToolError } from '../formatters/common.js';
 
@@ -13,6 +14,8 @@ export const getFightEventsSchema = z.object({
   source_name: z.string().optional().describe('Filter by source name (player or NPC), applied server-side. Includes the actor\'s pets, whose events carry sourceOwnerName.'),
   target_name: z.string().optional().describe('Filter by target name (player or NPC), applied server-side'),
   ability_id: z.number().optional().describe('Filter by ability ID'),
+  start_time_s: z.number().optional().describe('Window start, in seconds since the pull'),
+  end_time_s: z.number().optional().describe('Window end, in seconds since the pull'),
   page_token: z.number().optional().describe('Resume from a previous response\'s nextPageToken'),
   max_pages: z.number().min(1).max(20).optional().default(1).describe('Pages to follow automatically (default 1, max 20)'),
 });
@@ -119,11 +122,14 @@ export async function handleGetFightEvents(
     const actors = report.masterData.actors;
     const ambiguous: Record<string, string[]> = {};
 
+    const window = computeWindow(fight, args.start_time_s, args.end_time_s);
+    if (isToolError(window)) return window;
+
     const variables: Record<string, unknown> = {
       code: args.report_code,
       fightID: args.fight_id,
-      startTime: fight.startTime,
-      endTime: fight.endTime,
+      startTime: window.startTime,
+      endTime: window.endTime,
     };
 
     for (const [argName, variable] of [
@@ -151,10 +157,10 @@ export async function handleGetFightEvents(
     if (args.ability_id) variables.abilityID = args.ability_id;
 
     if (args.page_token !== undefined
-      && (args.page_token < fight.startTime || args.page_token > fight.endTime)) {
+      && (args.page_token < window.startTime || args.page_token > window.endTime)) {
       return {
         error: 'invalid_page_token',
-        message: `page_token ${args.page_token} is outside fight ${args.fight_id} (${fight.startTime}-${fight.endTime})`,
+        message: `page_token ${args.page_token} is outside the requested window (${window.startTime}-${window.endTime})`,
         suggestion: 'Pass the nextPageToken from a previous response for this same fight. It is an absolute report timestamp, not a relative time.',
       } as ToolError;
     }
@@ -162,7 +168,7 @@ export async function handleGetFightEvents(
     // Follow WCL's cursor for up to max_pages. Without this the caller could
     // see that more events existed but had no way to reach them.
     const maxPages = args.max_pages ?? 1;
-    let cursor: number = args.page_token ?? fight.startTime;
+    let cursor: number = args.page_token ?? window.startTime;
     let nextPageToken: number | null = null;
     let pagesFetched = 0;
     const rawEvents: RawEvent[] = [];
@@ -212,6 +218,9 @@ export async function handleGetFightEvents(
       pullTimestamp: fight.startTime,
       fightEndTimestamp: fight.endTime,
       fightDurationMs: fight.endTime - fight.startTime,
+      ...(window.isPartial
+        ? { window: { startTimeS: args.start_time_s ?? 0, endTimeS: args.end_time_s ?? (fight.endTime - fight.startTime) / 1000 } }
+        : {}),
       eventType: args.event_type ?? 'all',
       eventCount: events.length,
       ...(Object.keys(ambiguous).length > 0 ? { ambiguousNameFilters: ambiguous } : {}),
