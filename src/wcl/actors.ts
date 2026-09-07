@@ -48,3 +48,19 @@ export function suggestActorNames(actors: ActorRef[], name: string, limit = 8): 
 
   return out.slice(0, limit);
 }
+
+export const FIGHT_ACTORS_QUERY = `
+query FightActors($code: String!) {
+  reportData {
+    report(code: $code) {
+      masterData {
+        actors {
+          id
+          name
+          type
+        }
+      }
+    }
+  }
+}
+`;

@@ -4,11 +4,13 @@ import { COMBATANT_INFO_QUERY, type WCLActor } from '../wcl/queries.js';
 import { combatantKey } from '../session/cache.js';
 import { logger } from '../utils/logger.js';
 import { authFailure, serviceUnavailable, type ToolError } from '../formatters/common.js';
+import { filterSummaryToPlayer } from '../formatters/combatants.js';
+import { resolveActorId, suggestActorNames } from '../wcl/actors.js';
 
 export const getCombatantInfoSchema = z.object({
   report_code: z.string().describe('WCL report code'),
   fight_id: z.number().describe('Fight ID'),
-  player_name: z.string().optional().describe('Filter to a specific player'),
+  player_name: z.string().optional().describe('Filter to a specific player -- also narrows playerDetails, which is very large unfiltered'),
 });
 
 export type GetCombatantInfoArgs = z.infer<typeof getCombatantInfoSchema>;
@@ -50,10 +52,19 @@ export async function handleGetCombatantInfo(
     );
 
     const report = data.reportData.report;
-    let actors = report.masterData.actors.filter(a => a.type === 'Player');
+    const players = report.masterData.actors.filter(a => a.type === 'Player');
 
+    let actors = players;
     if (args.player_name) {
-      actors = actors.filter(a => a.name.toLowerCase() === args.player_name!.toLowerCase());
+      const { matches } = resolveActorId(players, args.player_name);
+      if (matches.length === 0) {
+        return {
+          error: 'actor_not_found',
+          message: `No player named "${args.player_name}" in fight ${args.fight_id} of report ${args.report_code}`,
+          suggestion: `Check the spelling. Players in this report include: ${suggestActorNames(players, args.player_name).join(', ')}`,
+        } as ToolError;
+      }
+      actors = matches as typeof players;
     }
 
     const combatants: CombatantInfoEntry[] = actors.map(a => ({
@@ -67,7 +78,11 @@ export async function handleGetCombatantInfo(
       reportCode: args.report_code,
       fightId: args.fight_id,
       combatants,
-      playerDetails: report.playerDetails?.data ?? null,
+      // Filtering the Summary payload matters: unfiltered it runs to hundreds
+      // of thousands of characters for a full raid.
+      playerDetails: args.player_name
+        ? filterSummaryToPlayer(report.playerDetails?.data ?? null, args.player_name)
+        : report.playerDetails?.data ?? null,
     };
   } catch (error) {
     const latencyMs = Date.now() - startTime;

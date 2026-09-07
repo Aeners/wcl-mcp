@@ -245,7 +245,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'get_buff_uptime',
-      description: 'Buff and debuff uptime tracking for specific fights. Returns per-player buff/debuff uptime percentages.',
+      description: 'Buff and debuff uptime tracking for specific fights. Raid-wide by default; pass player_name to scope it to one player.',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -261,13 +261,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'get_combatant_info',
-      description: 'Player setup context: class, spec, and player details from a specific fight.',
+      description: 'Player setup context: class, spec, gear and consumable use from a specific fight. Pass player_name -- the unfiltered roster payload is very large.',
       inputSchema: {
         type: 'object' as const,
         properties: {
           report_code: { type: 'string', description: 'WCL report code' },
           fight_id: { type: 'number', description: 'Fight ID' },
-          player_name: { type: 'string', description: 'Filter to a specific player' },
+          player_name: { type: 'string', description: 'Filter to a specific player -- also narrows playerDetails, which is very large unfiltered' },
         },
         required: ['report_code', 'fight_id'],
       },

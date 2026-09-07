@@ -432,6 +432,57 @@ describe('Tool Integration Tests', () => {
     });
   });
 
+  describe('per-player filters', () => {
+    it('returns fewer auras for one player than for the raid', async () => {
+      sessionCache.clear();
+      const raidWide = await handleGetBuffUptime(client, {
+        report_code: reportCode,
+        fight_ids: [fightId],
+        buff_type: 'buffs',
+      }) as { auras: unknown[] };
+
+      const summary = await handleGetFightDamage(client, {
+        report_code: reportCode,
+        fight_ids: [fightId],
+      }) as { entries: Array<{ name: string }> };
+
+      const onePlayer = await handleGetBuffUptime(client, {
+        report_code: reportCode,
+        fight_ids: [fightId],
+        buff_type: 'buffs',
+        player_name: summary.entries[0].name,
+      }) as { auras: unknown[]; playerName?: string };
+
+      expect(onePlayer.auras.length).toBeGreaterThan(0);
+      expect(onePlayer.auras.length).toBeLessThan(raidWide.auras.length);
+      expect(onePlayer.playerName).toBe(summary.entries[0].name);
+    }, 30_000);
+
+    it('shrinks the combatant Summary payload to one player', async () => {
+      sessionCache.clear();
+      const summary = await handleGetFightDamage(client, {
+        report_code: reportCode,
+        fight_ids: [fightId],
+      }) as { entries: Array<{ name: string }> };
+      const someone = summary.entries[0].name;
+
+      const full = await handleGetCombatantInfo(client, {
+        report_code: reportCode,
+        fight_id: fightId,
+      }) as { playerDetails: unknown };
+
+      const filtered = await handleGetCombatantInfo(client, {
+        report_code: reportCode,
+        fight_id: fightId,
+        player_name: someone,
+      }) as { combatants: Array<{ name: string }>; playerDetails: unknown };
+
+      expect(filtered.combatants).toHaveLength(1);
+      expect(JSON.stringify(filtered.playerDetails).length)
+        .toBeLessThan(JSON.stringify(full.playerDetails).length);
+    }, 30_000);
+  });
+
   describe('report-scoped character tools', () => {
     it('answers from report_code + fight_ids + name without a realm or region', async () => {
       const summary = await handleGetFightDamage(client, {

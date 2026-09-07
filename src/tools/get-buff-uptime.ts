@@ -3,6 +3,7 @@ import { WCLClient, WCLError } from '../wcl/client.js';
 import { FIGHT_TABLE_QUERY } from '../wcl/queries.js';
 import { fightTableKey } from '../session/cache.js';
 import { resolveWindow, isToolError, windowKeySuffix } from '../wcl/window.js';
+import { FIGHT_ACTORS_QUERY, resolveActorId, suggestActorNames, type ActorRef } from '../wcl/actors.js';
 import { logger } from '../utils/logger.js';
 import { formatBuffAuras, type AuraEntry, type WCLAura } from '../formatters/buffs.js';
 import { authFailure, serviceUnavailable, type ToolError } from '../formatters/common.js';
@@ -10,7 +11,7 @@ import { authFailure, serviceUnavailable, type ToolError } from '../formatters/c
 export const getBuffUptimeSchema = z.object({
   report_code: z.string().describe('WCL report code'),
   fight_ids: z.array(z.number()).min(1).describe('Fight IDs to analyze'),
-  player_name: z.string().optional().describe('Filter to a specific player (note: Buffs table is not per-player in WCL)'),
+  player_name: z.string().optional().describe('Filter to a specific player'),
   buff_type: z.enum(['buffs', 'debuffs', 'both']).optional().default('both').describe('Type of buffs to fetch'),
   start_time_s: z.number().optional().describe('Window start, in seconds since the pull (single fight only)'),
   end_time_s: z.number().optional().describe('Window end, in seconds since the pull (single fight only)'),
@@ -22,6 +23,7 @@ interface BuffUptimeResult {
   reportCode: string;
   fightIds: number[];
   buffType: string;
+  playerName?: string;
   auras: AuraEntry[];
 }
 
@@ -36,6 +38,26 @@ export async function handleGetBuffUptime(
     const buffType = args.buff_type ?? 'both';
     const allAuras: AuraEntry[] = [];
 
+    // Resolve the player to an actor ID -- the Buffs table accepts sourceID, so
+    // this is a real filter rather than a raid-wide dump the caller has to sift.
+    let sourceID: number | undefined;
+    if (args.player_name) {
+      const actorData = await client.query<{
+        reportData: { report: { masterData: { actors: ActorRef[] } } };
+      }>(FIGHT_ACTORS_QUERY, { code: args.report_code }, `${args.report_code}:actors`);
+
+      const actors = actorData.reportData.report.masterData.actors;
+      const { id } = resolveActorId(actors, args.player_name);
+      if (id === undefined) {
+        return {
+          error: 'actor_not_found',
+          message: `No actor named "${args.player_name}" in report ${args.report_code}`,
+          suggestion: `Check the spelling. Actors in this report include: ${suggestActorNames(actors, args.player_name).join(', ')}`,
+        } as ToolError;
+      }
+      sourceID = id;
+    }
+
     const windowed = args.start_time_s !== undefined || args.end_time_s !== undefined;
     const window = windowed
       ? await resolveWindow(client, args.report_code, args.fight_ids, args.start_time_s, args.end_time_s)
@@ -46,7 +68,7 @@ export async function handleGetBuffUptime(
       const cacheKey = fightTableKey(
         args.report_code,
         args.fight_ids[0],
-        `Buffs:${args.fight_ids.join(',')}${windowKeySuffix(args.start_time_s, args.end_time_s)}`,
+        `Buffs:${args.fight_ids.join(',')}${windowKeySuffix(args.start_time_s, args.end_time_s)}${sourceID !== undefined ? `:s${sourceID}` : ''}`,
       );
       const data = await client.query<{
         reportData: { report: { table: { data: { auras: WCLAura[]; totalTime: number } } } }
@@ -58,6 +80,7 @@ export async function handleGetBuffUptime(
           dataType: 'Buffs',
           startTime: window?.startTime,
           endTime: window?.endTime,
+          sourceID,
         },
         cacheKey,
       );
@@ -70,7 +93,7 @@ export async function handleGetBuffUptime(
       const cacheKey = fightTableKey(
         args.report_code,
         args.fight_ids[0],
-        `Debuffs:${args.fight_ids.join(',')}${windowKeySuffix(args.start_time_s, args.end_time_s)}`,
+        `Debuffs:${args.fight_ids.join(',')}${windowKeySuffix(args.start_time_s, args.end_time_s)}${sourceID !== undefined ? `:s${sourceID}` : ''}`,
       );
       const data = await client.query<{
         reportData: { report: { table: { data: { auras: WCLAura[]; totalTime: number } } } }
@@ -82,6 +105,7 @@ export async function handleGetBuffUptime(
           dataType: 'Debuffs',
           startTime: window?.startTime,
           endTime: window?.endTime,
+          sourceID,
         },
         cacheKey,
       );
@@ -99,6 +123,7 @@ export async function handleGetBuffUptime(
       reportCode: args.report_code,
       fightIds: args.fight_ids,
       buffType,
+      ...(args.player_name ? { playerName: args.player_name } : {}),
       auras: allAuras,
     };
   } catch (error) {
