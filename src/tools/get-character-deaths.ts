@@ -7,7 +7,7 @@ import { realmToSlug } from '../utils/realm.js';
 import { normalizeRegion } from '../utils/region.js';
 import { logger } from '../utils/logger.js';
 import { formatDeathsTable, aggregateDeaths, type DeathAggregation } from '../formatters/deaths.js';
-import { noActiveCharacter, characterNotFound, authFailure, serviceUnavailable, type ToolError } from '../formatters/common.js';
+import { characterNameRequired, noActiveCharacter, characterNotFound, authFailure, serviceUnavailable, type ToolError } from '../formatters/common.js';
 
 export const getCharacterDeathsSchema = z.object({
   name: z.string().optional().describe('Character name (defaults to active character)'),
@@ -41,14 +41,23 @@ export async function handleGetCharacterDeaths(
   const rawRealm = args.realm ?? active?.realm;
   const rawRegion = args.region ?? active?.region;
 
-  if (!name || !rawRealm || !rawRegion) return noActiveCharacter();
+  // Report discovery is the only step that needs a realm and region. When the
+  // caller already names the report and fights, the character identity is just
+  // a name to match inside that report's table.
+  const reportIsScoped = Boolean(args.report_code && args.fight_ids?.length);
 
-  const realm = realmToSlug(rawRealm);
-  let region: string;
-  try {
-    region = normalizeRegion(rawRegion);
-  } catch {
-    return { error: 'invalid_region', message: `Invalid region "${rawRegion}"`, suggestion: 'Valid regions: us, eu, kr, tw.' } as ToolError;
+  if (!name) return reportIsScoped ? characterNameRequired() : noActiveCharacter();
+  if (!reportIsScoped && (!rawRealm || !rawRegion)) return noActiveCharacter();
+
+  let realm = '';
+  let region = '';
+  if (rawRealm && rawRegion) {
+    realm = realmToSlug(rawRealm);
+    try {
+      region = normalizeRegion(rawRegion);
+    } catch {
+      return { error: 'invalid_region', message: `Invalid region "${rawRegion}"`, suggestion: 'Valid regions: us, eu, kr, tw.' } as ToolError;
+    }
   }
 
   logger.toolCall('get_character_deaths', { name, realm, region, report_code: args.report_code, content_type: args.content_type });

@@ -77,3 +77,11 @@ export function computeOverhealingPct(overheal: number, totalRaw: number): numbe
   if (totalRaw <= 0) return 0;
   return Math.round(overheal / totalRaw * 1000) / 10;
 }
+
+export function characterNameRequired(): ToolError {
+  return makeError(
+    'character_name_required',
+    'A character name is needed to pick this player out of the report.',
+    'Pass `name`, or call set_active_character first. Realm and region are only needed when the report has to be discovered.',
+  );
+}

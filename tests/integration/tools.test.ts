@@ -432,6 +432,32 @@ describe('Tool Integration Tests', () => {
     });
   });
 
+  describe('report-scoped character tools', () => {
+    it('answers from report_code + fight_ids + name without a realm or region', async () => {
+      const summary = await handleGetFightDamage(client, {
+        report_code: reportCode,
+        fight_ids: [fightId],
+      }) as { entries: Array<{ name: string }> };
+      const someone = summary.entries[0].name;
+
+      // No active character, so realm/region genuinely cannot be filled in.
+      clearActiveCharacter();
+      try {
+        const result = await handleGetCharacterCasts(client, {
+          name: someone,
+          report_code: reportCode,
+          fight_ids: [fightId],
+        }) as { playerName: string; abilities: Array<{ name: string }>; fightsAnalyzed: number };
+
+        expect(isError(result)).toBe(false);
+        expect(result.fightsAnalyzed).toBe(1);
+        expect(result.abilities.length).toBeGreaterThan(0);
+      } finally {
+        await handleSetActiveCharacter(client, { name: 'Whitearrows', realm: 'Khadgar', region: 'us' });
+      }
+    }, 20_000);
+  });
+
   describe('time windows', () => {
     it('scopes a damage table to the first 60 seconds', async () => {
       const full = await handleGetFightDamage(client, {
