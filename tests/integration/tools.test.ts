@@ -456,5 +456,64 @@ describe('Tool Integration Tests', () => {
       const firstEvent = result.events[0];
       expect(firstEvent.sourceName).toBeTruthy();
     });
+
+    it('filters to a single source server-side', async () => {
+      const unfiltered = await handleGetFightEvents(client, {
+        report_code: reportCode,
+        fight_id: fightId,
+        event_type: 'damage-done',
+      }) as { events: Array<Record<string, unknown>> };
+
+      const someone = unfiltered.events.find(e => e.sourceName)?.sourceName as string;
+      expect(someone).toBeTruthy();
+
+      const filtered = await handleGetFightEvents(client, {
+        report_code: reportCode,
+        fight_id: fightId,
+        event_type: 'damage-done',
+        source_name: someone,
+      }) as { eventCount: number; events: Array<Record<string, unknown>> };
+
+      // Every returned event belongs to that actor or to one of its pets --
+      // proof the API honoured sourceID rather than us discarding a page of
+      // raid-wide events. WCL's sourceID filter is owner-scoped.
+      expect(filtered.eventCount).toBeGreaterThan(0);
+      expect(filtered.events.every(
+        e => e.sourceName === someone || e.sourceOwnerName === someone,
+      )).toBe(true);
+    }, 20_000);
+
+    it('enriches events with pull-relative times and ability names', async () => {
+      const result = await handleGetFightEvents(client, {
+        report_code: reportCode,
+        fight_id: fightId,
+        event_type: 'casts',
+      }) as {
+        pullTimestamp: number;
+        fightDurationMs: number;
+        events: Array<Record<string, unknown>>;
+      };
+
+      expect(typeof result.pullTimestamp).toBe('number');
+      expect(result.fightDurationMs).toBeGreaterThan(0);
+
+      const first = result.events[0];
+      expect(typeof first.relativeTime).toBe('number');
+      expect(first.relativeTime).toBe(
+        Math.round((first.timestamp as number) - result.pullTimestamp) / 1000,
+      );
+      expect(result.events.some(e => typeof e.abilityName === 'string')).toBe(true);
+    });
+
+    it('rejects an unknown source name instead of returning nothing', async () => {
+      const result = await handleGetFightEvents(client, {
+        report_code: reportCode,
+        fight_id: fightId,
+        source_name: 'Nosuchplayerxyz',
+      });
+
+      expect(isError(result)).toBe(true);
+      if (isError(result)) expect(result.error).toBe('actor_not_found');
+    });
   });
 });

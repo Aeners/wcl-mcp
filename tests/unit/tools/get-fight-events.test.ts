@@ -21,7 +21,11 @@ function respond(events: Array<Record<string, unknown>>, nextPageTimestamp: numb
           report: {
             fights: [{ id: 13, name: "Ula'tek", startTime: PULL, endTime: END }],
             masterData: {
-              actors: [{ id: 24, name: 'Explanas', type: 'Player' }],
+              actors: [
+                { id: 24, name: 'Explanas', type: 'Player' },
+                { id: 144, name: "Ula'tek", type: 'NPC' },
+                { id: 73, name: 'Force of Nature', type: 'Pet', petOwner: 24 },
+              ],
               abilities: [
                 { gameID: 190984, name: 'Wrath' },
                 { gameID: 102560, name: 'Incarnation: Chosen of Elune' },
@@ -117,5 +121,99 @@ describe('handleGetFightEvents -- ability names', () => {
     await handleGetFightEvents(stub.client, { report_code: '8DPcRJd1LapWyr6A', fight_id: 13 });
 
     expect(stub.callWith('FightMeta')?.query).toContain('abilities');
+  });
+});
+
+describe('handleGetFightEvents -- server-side actor filtering', () => {
+  it('passes sourceID to the API instead of filtering after the fact', async () => {
+    const stub = stubClient(respond([]));
+
+    await handleGetFightEvents(stub.client, {
+      report_code: '8DPcRJd1LapWyr6A',
+      fight_id: 13,
+      event_type: 'casts',
+      source_name: 'Explanas',
+    });
+
+    expect(stub.callWith('FightEvents')?.variables.sourceID).toBe(24);
+  });
+
+  it('passes targetID for a target filter', async () => {
+    const stub = stubClient(respond([]));
+
+    await handleGetFightEvents(stub.client, {
+      report_code: '8DPcRJd1LapWyr6A',
+      fight_id: 13,
+      target_name: "Ula'tek",
+    });
+
+    expect(stub.callWith('FightEvents')?.variables.targetID).toBe(144);
+  });
+
+  it('keeps every event the API returned -- no post-filtering drops', async () => {
+    const { client } = stubClient(respond([
+      { timestamp: 3587269, type: 'cast', sourceID: 24, abilityGameID: 190984 },
+      { timestamp: 3588533, type: 'cast', sourceID: 24, abilityGameID: 190984 },
+    ]));
+
+    const result = await handleGetFightEvents(client, {
+      report_code: '8DPcRJd1LapWyr6A',
+      fight_id: 13,
+      source_name: 'Explanas',
+    }) as FightEventsResult;
+
+    expect(result.eventCount).toBe(2);
+  });
+
+  it('errors with candidate names when the actor is unknown', async () => {
+    const stub = stubClient(respond([]));
+
+    const result = await handleGetFightEvents(stub.client, {
+      report_code: '8DPcRJd1LapWyr6A',
+      fight_id: 13,
+      source_name: 'Explanass',
+    }) as { error: string; suggestion: string };
+
+    expect(result.error).toBe('actor_not_found');
+    expect(result.suggestion).toContain('Explanas');
+    expect(stub.callWith('FightEvents')).toBeUndefined();
+  });
+
+  it('omits sourceID entirely when no name filter is given', async () => {
+    const stub = stubClient(respond([]));
+
+    await handleGetFightEvents(stub.client, { report_code: '8DPcRJd1LapWyr6A', fight_id: 13 });
+
+    expect(stub.callWith('FightEvents')?.variables.sourceID).toBeUndefined();
+  });
+});
+
+describe('handleGetFightEvents -- pet attribution', () => {
+  it('attributes a pet event to its owner', async () => {
+    const { client } = stubClient(respond([
+      { timestamp: 3587269, type: 'damage', sourceID: 73, abilityGameID: 190984 },
+    ]));
+
+    const result = await handleGetFightEvents(client, {
+      report_code: '8DPcRJd1LapWyr6A',
+      fight_id: 13,
+      source_name: 'Explanas',
+    }) as FightEventsResult;
+
+    expect(result.events[0].sourceName).toBe('Force of Nature');
+    expect(result.events[0].sourceOwnerName).toBe('Explanas');
+  });
+
+  it('leaves sourceOwnerName off events from a non-pet source', async () => {
+    const { client } = stubClient(respond([
+      { timestamp: 3587269, type: 'damage', sourceID: 24, abilityGameID: 190984 },
+    ]));
+
+    const result = await handleGetFightEvents(client, {
+      report_code: '8DPcRJd1LapWyr6A',
+      fight_id: 13,
+    }) as FightEventsResult;
+
+    expect(result.events[0]).not.toHaveProperty('sourceOwnerName');
   });
 });

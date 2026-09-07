@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { WCLClient, WCLError } from '../wcl/client.js';
 import { FIGHT_EVENTS_QUERY } from '../wcl/queries.js';
 import { withAbilityNames, withRelativeTime, type RawEvent } from '../formatters/events.js';
+import { resolveActorId, suggestActorNames } from '../wcl/actors.js';
 import { logger } from '../utils/logger.js';
 import { authFailure, serviceUnavailable, type ToolError } from '../formatters/common.js';
 
@@ -9,8 +10,8 @@ export const getFightEventsSchema = z.object({
   report_code: z.string().describe('WCL report code'),
   fight_id: z.number().describe('Fight ID'),
   event_type: z.enum(['casts', 'damage-done', 'damage-taken', 'healing', 'buffs', 'debuffs', 'deaths']).optional().describe('Event type filter'),
-  source_name: z.string().optional().describe('Filter by source player name (client-side filter)'),
-  target_name: z.string().optional().describe('Filter by target name (client-side filter)'),
+  source_name: z.string().optional().describe('Filter by source name (player or NPC), applied server-side. Includes the actor\'s pets, whose events carry sourceOwnerName.'),
+  target_name: z.string().optional().describe('Filter by target name (player or NPC), applied server-side'),
   ability_id: z.number().optional().describe('Filter by ability ID'),
 });
 
@@ -43,6 +44,7 @@ query FightMeta($code: String!, $fightIDs: [Int]!) {
           id
           name
           type
+          petOwner
         }
         abilities {
           gameID
@@ -73,7 +75,7 @@ export async function handleGetFightEvents(
         report: {
           fights: Array<{ id: number; name: string; startTime: number; endTime: number }>;
           masterData: {
-            actors: Array<{ id: number; name: string; type: string }>;
+            actors: Array<{ id: number; name: string; type: string; petOwner?: number | null }>;
             abilities: Array<{ gameID: number; name: string }>;
           };
         };
@@ -95,19 +97,53 @@ export async function handleGetFightEvents(
 
     // Build actor ID->name and ability ID->name maps for enriching events later
     const actorMap = new Map(report.masterData.actors.map(a => [a.id, a.name]));
+    // Pet -> owner, so pet damage is attributable to the player it belongs to.
+    const petOwnerMap = new Map(
+      report.masterData.actors
+        .filter(a => a.petOwner != null)
+        .map(a => [a.id, actorMap.get(a.petOwner as number)] as const),
+    );
     const abilityMap = new Map(
       (report.masterData.abilities ?? []).map(a => [a.gameID, a.name] as const),
     );
 
-    // Fetch events -- don't use sourceID/targetID params because
-    // masterData actor IDs and event sourceIDs use different ID spaces.
-    // We filter client-side instead.
+    // Resolve name filters to actor IDs so the API does the filtering. Filtering
+    // client-side used to mean paging in raid-wide events and throwing most of
+    // them away, which also made `hasMore` describe the unfiltered stream.
+    //
+    // Note: a sourceID filter is owner-scoped -- WCL also returns the actor's
+    // pets, which is what you want for damage attribution. Those events carry
+    // sourceOwnerName so the attribution stays visible.
+    const actors = report.masterData.actors;
+    const ambiguous: Record<string, string[]> = {};
+
     const variables: Record<string, unknown> = {
       code: args.report_code,
       fightID: args.fight_id,
       startTime: fight.startTime,
       endTime: fight.endTime,
     };
+
+    for (const [argName, variable] of [
+      ['source_name', 'sourceID'],
+      ['target_name', 'targetID'],
+    ] as const) {
+      const wanted = args[argName];
+      if (!wanted) continue;
+
+      const { id, matches } = resolveActorId(actors, wanted);
+      if (id === undefined) {
+        return {
+          error: 'actor_not_found',
+          message: `No actor named "${wanted}" in fight ${args.fight_id} of report ${args.report_code}`,
+          suggestion: `Check the spelling. Actors in this report include: ${suggestActorNames(actors, wanted).join(', ')}`,
+        } as ToolError;
+      }
+      if (matches.length > 1) {
+        ambiguous[argName] = matches.map(m => `${m.name} (id ${m.id})`);
+      }
+      variables[variable] = id;
+    }
 
     if (args.event_type) variables.dataType = EVENT_TYPE_MAP[args.event_type];
     if (args.ability_id) variables.abilityID = args.ability_id;
@@ -116,7 +152,7 @@ export async function handleGetFightEvents(
       reportData: {
         report: {
           events: {
-            data: Array<Record<string, unknown>>;
+            data: RawEvent[];
             nextPageTimestamp: number | null;
           };
         };
@@ -126,28 +162,15 @@ export async function handleGetFightEvents(
       variables,
     );
 
-    let events = eventsData.reportData.report.events.data;
-
-    // Enrich events with actor names
-    events = events.map(e => ({
-      ...e,
-      sourceName: actorMap.get(e.sourceID as number),
-      targetName: actorMap.get(e.targetID as number),
-    }));
-
-    // Client-side filtering by source/target name
-    if (args.source_name) {
-      const filterName = args.source_name.toLowerCase();
-      events = events.filter(e =>
-        (e.sourceName as string)?.toLowerCase() === filterName
-      );
-    }
-    if (args.target_name) {
-      const filterName = args.target_name.toLowerCase();
-      events = events.filter(e =>
-        (e.targetName as string)?.toLowerCase() === filterName
-      );
-    }
+    const events = eventsData.reportData.report.events.data.map(e => {
+      const ownerName = petOwnerMap.get(e.sourceID as number);
+      return {
+        ...e,
+        sourceName: actorMap.get(e.sourceID as number),
+        targetName: actorMap.get(e.targetID as number),
+        ...(ownerName ? { sourceOwnerName: ownerName } : {}),
+      };
+    });
 
     logger.toolResult('get_fight_events', { success: true, latencyMs: Date.now() - startTime });
 
@@ -162,10 +185,11 @@ export async function handleGetFightEvents(
       fightDurationMs: fight.endTime - fight.startTime,
       eventType: args.event_type ?? 'all',
       eventCount: events.length,
+      ...(Object.keys(ambiguous).length > 0 ? { ambiguousNameFilters: ambiguous } : {}),
       hasMore: eventsData.reportData.report.events.nextPageTimestamp !== null,
       nextPageTimestamp: eventsData.reportData.report.events.nextPageTimestamp,
       events: withAbilityNames(
-        withRelativeTime(events as RawEvent[], fight.startTime),
+        withRelativeTime(events, fight.startTime),
         abilityMap,
       ),
     };
