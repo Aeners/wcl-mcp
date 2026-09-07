@@ -3,3 +3,6 @@ dist/
 .env
 .mcp.json
 *.tsbuildinfo
+
+# Local skills/agents -- will move to their own repository
+.claude/
