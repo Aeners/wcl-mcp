@@ -20,7 +20,13 @@ function respond(events: Array<Record<string, unknown>>, nextPageTimestamp: numb
         reportData: {
           report: {
             fights: [{ id: 13, name: "Ula'tek", startTime: PULL, endTime: END }],
-            masterData: { actors: [{ id: 24, name: 'Explanas', type: 'Player' }] },
+            masterData: {
+              actors: [{ id: 24, name: 'Explanas', type: 'Player' }],
+              abilities: [
+                { gameID: 190984, name: 'Wrath' },
+                { gameID: 102560, name: 'Incarnation: Chosen of Elune' },
+              ],
+            },
           },
         },
       };
@@ -74,7 +80,7 @@ describe('handleGetFightEvents -- pull timestamp', () => {
 
   it('returns a structured error when the fight is missing', async () => {
     const { client } = stubClient(() => ({
-      reportData: { report: { fights: [], masterData: { actors: [] } } },
+      reportData: { report: { fights: [], masterData: { actors: [], abilities: [] } } },
     }));
 
     const result = await handleGetFightEvents(client, {
@@ -83,5 +89,33 @@ describe('handleGetFightEvents -- pull timestamp', () => {
     }) as { error: string };
 
     expect(result.error).toBe('fight_not_found');
+  });
+});
+
+describe('handleGetFightEvents -- ability names', () => {
+  it('names each ability from the report master data', async () => {
+    const { client } = stubClient(respond([
+      { timestamp: 3587269, type: 'cast', sourceID: 24, abilityGameID: 190984 },
+      { timestamp: 3599710, type: 'cast', sourceID: 24, abilityGameID: 102560 },
+    ]));
+
+    const result = await handleGetFightEvents(client, {
+      report_code: '8DPcRJd1LapWyr6A',
+      fight_id: 13,
+      event_type: 'casts',
+    }) as FightEventsResult;
+
+    expect(result.events.map(e => e.abilityName)).toEqual([
+      'Wrath',
+      'Incarnation: Chosen of Elune',
+    ]);
+  });
+
+  it('requests the ability table alongside the actor table', async () => {
+    const stub = stubClient(respond([]));
+
+    await handleGetFightEvents(stub.client, { report_code: '8DPcRJd1LapWyr6A', fight_id: 13 });
+
+    expect(stub.callWith('FightMeta')?.query).toContain('abilities');
   });
 });

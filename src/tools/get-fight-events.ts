@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { WCLClient, WCLError } from '../wcl/client.js';
 import { FIGHT_EVENTS_QUERY } from '../wcl/queries.js';
-import { withRelativeTime, type RawEvent } from '../formatters/events.js';
+import { withAbilityNames, withRelativeTime, type RawEvent } from '../formatters/events.js';
 import { logger } from '../utils/logger.js';
 import { authFailure, serviceUnavailable, type ToolError } from '../formatters/common.js';
 
@@ -44,6 +44,10 @@ query FightMeta($code: String!, $fightIDs: [Int]!) {
           name
           type
         }
+        abilities {
+          gameID
+          name
+        }
       }
     }
   }
@@ -68,7 +72,10 @@ export async function handleGetFightEvents(
       reportData: {
         report: {
           fights: Array<{ id: number; name: string; startTime: number; endTime: number }>;
-          masterData: { actors: Array<{ id: number; name: string; type: string }> };
+          masterData: {
+            actors: Array<{ id: number; name: string; type: string }>;
+            abilities: Array<{ gameID: number; name: string }>;
+          };
         };
       };
     }>(
@@ -86,8 +93,11 @@ export async function handleGetFightEvents(
       } as ToolError;
     }
 
-    // Build actor ID->name map for enriching events later
+    // Build actor ID->name and ability ID->name maps for enriching events later
     const actorMap = new Map(report.masterData.actors.map(a => [a.id, a.name]));
+    const abilityMap = new Map(
+      (report.masterData.abilities ?? []).map(a => [a.gameID, a.name] as const),
+    );
 
     // Fetch events -- don't use sourceID/targetID params because
     // masterData actor IDs and event sourceIDs use different ID spaces.
@@ -154,7 +164,10 @@ export async function handleGetFightEvents(
       eventCount: events.length,
       hasMore: eventsData.reportData.report.events.nextPageTimestamp !== null,
       nextPageTimestamp: eventsData.reportData.report.events.nextPageTimestamp,
-      events: withRelativeTime(events as RawEvent[], fight.startTime),
+      events: withAbilityNames(
+        withRelativeTime(events as RawEvent[], fight.startTime),
+        abilityMap,
+      ),
     };
   } catch (error) {
     const latencyMs = Date.now() - startTime;
