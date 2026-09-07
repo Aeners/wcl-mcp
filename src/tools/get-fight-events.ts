@@ -13,6 +13,8 @@ export const getFightEventsSchema = z.object({
   source_name: z.string().optional().describe('Filter by source name (player or NPC), applied server-side. Includes the actor\'s pets, whose events carry sourceOwnerName.'),
   target_name: z.string().optional().describe('Filter by target name (player or NPC), applied server-side'),
   ability_id: z.number().optional().describe('Filter by ability ID'),
+  page_token: z.number().optional().describe('Resume from a previous response\'s nextPageToken'),
+  max_pages: z.number().min(1).max(20).optional().default(1).describe('Pages to follow automatically (default 1, max 20)'),
 });
 
 export type GetFightEventsArgs = z.infer<typeof getFightEventsSchema>;
@@ -148,21 +150,48 @@ export async function handleGetFightEvents(
     if (args.event_type) variables.dataType = EVENT_TYPE_MAP[args.event_type];
     if (args.ability_id) variables.abilityID = args.ability_id;
 
-    const eventsData = await client.query<{
-      reportData: {
-        report: {
-          events: {
-            data: RawEvent[];
-            nextPageTimestamp: number | null;
+    if (args.page_token !== undefined
+      && (args.page_token < fight.startTime || args.page_token > fight.endTime)) {
+      return {
+        error: 'invalid_page_token',
+        message: `page_token ${args.page_token} is outside fight ${args.fight_id} (${fight.startTime}-${fight.endTime})`,
+        suggestion: 'Pass the nextPageToken from a previous response for this same fight. It is an absolute report timestamp, not a relative time.',
+      } as ToolError;
+    }
+
+    // Follow WCL's cursor for up to max_pages. Without this the caller could
+    // see that more events existed but had no way to reach them.
+    const maxPages = args.max_pages ?? 1;
+    let cursor: number = args.page_token ?? fight.startTime;
+    let nextPageToken: number | null = null;
+    let pagesFetched = 0;
+    const rawEvents: RawEvent[] = [];
+
+    while (pagesFetched < maxPages) {
+      const page = await client.query<{
+        reportData: {
+          report: {
+            events: {
+              data: RawEvent[];
+              nextPageTimestamp: number | null;
+            };
           };
         };
-      };
-    }>(
-      FIGHT_EVENTS_QUERY,
-      variables,
-    );
+      }>(
+        FIGHT_EVENTS_QUERY,
+        { ...variables, startTime: cursor },
+      );
 
-    const events = eventsData.reportData.report.events.data.map(e => {
+      const { data, nextPageTimestamp } = page.reportData.report.events;
+      rawEvents.push(...data);
+      pagesFetched++;
+      nextPageToken = nextPageTimestamp;
+
+      if (nextPageTimestamp == null) break;
+      cursor = nextPageTimestamp;
+    }
+
+    const events = rawEvents.map(e => {
       const ownerName = petOwnerMap.get(e.sourceID as number);
       return {
         ...e,
@@ -186,8 +215,9 @@ export async function handleGetFightEvents(
       eventType: args.event_type ?? 'all',
       eventCount: events.length,
       ...(Object.keys(ambiguous).length > 0 ? { ambiguousNameFilters: ambiguous } : {}),
-      hasMore: eventsData.reportData.report.events.nextPageTimestamp !== null,
-      nextPageTimestamp: eventsData.reportData.report.events.nextPageTimestamp,
+      pagesFetched,
+      hasMore: nextPageToken !== null,
+      nextPageToken,
       events: withAbilityNames(
         withRelativeTime(events, fight.startTime),
         abilityMap,

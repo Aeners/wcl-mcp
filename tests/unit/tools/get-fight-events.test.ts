@@ -217,3 +217,98 @@ describe('handleGetFightEvents -- pet attribution', () => {
     expect(result.events[0]).not.toHaveProperty('sourceOwnerName');
   });
 });
+
+describe('handleGetFightEvents -- pagination', () => {
+  /** Responder serving `pages` in sequence, each with a cursor to the next. */
+  function paged(pages: Array<{ events: Array<Record<string, unknown>>; next: number | null }>) {
+    let i = 0;
+    return (query: string) => {
+      if (query.includes('FightMeta')) return respond([])(query);
+      const page = pages[Math.min(i, pages.length - 1)];
+      i++;
+      return { reportData: { report: { events: { data: page.events, nextPageTimestamp: page.next } } } };
+    };
+  }
+
+  const ev = (t: number) => ({ timestamp: t, type: 'cast', sourceID: 24, abilityGameID: 190984 });
+
+  it('fetches one page by default and hands back a cursor', async () => {
+    const { client, calls } = stubClient(paged([
+      { events: [ev(3587269)], next: 3599745 },
+      { events: [ev(3600000)], next: null },
+    ]));
+
+    const result = await handleGetFightEvents(client, {
+      report_code: '8DPcRJd1LapWyr6A',
+      fight_id: 13,
+    }) as FightEventsResult & { hasMore: boolean; nextPageToken: number | null; pagesFetched: number };
+
+    expect(result.eventCount).toBe(1);
+    expect(result.hasMore).toBe(true);
+    expect(result.nextPageToken).toBe(3599745);
+    expect(result.pagesFetched).toBe(1);
+    expect(calls.filter(c => c.query.includes('FightEvents'))).toHaveLength(1);
+  });
+
+  it('resumes from a page token', async () => {
+    const stub = stubClient(paged([{ events: [ev(3600000)], next: null }]));
+
+    await handleGetFightEvents(stub.client, {
+      report_code: '8DPcRJd1LapWyr6A',
+      fight_id: 13,
+      page_token: 3599745,
+    });
+
+    expect(stub.callWith('FightEvents')?.variables.startTime).toBe(3599745);
+  });
+
+  it('follows the cursor up to max_pages and concatenates', async () => {
+    const { client } = stubClient(paged([
+      { events: [ev(3587269)], next: 3599745 },
+      { events: [ev(3600000)], next: 3610000 },
+      { events: [ev(3611000)], next: null },
+    ]));
+
+    const result = await handleGetFightEvents(client, {
+      report_code: '8DPcRJd1LapWyr6A',
+      fight_id: 13,
+      max_pages: 5,
+    }) as FightEventsResult & { hasMore: boolean; pagesFetched: number };
+
+    expect(result.eventCount).toBe(3);
+    expect(result.pagesFetched).toBe(3);
+    expect(result.hasMore).toBe(false);
+  });
+
+  it('stops at max_pages and reports there is more', async () => {
+    const { client } = stubClient(paged([
+      { events: [ev(3587269)], next: 3599745 },
+      { events: [ev(3600000)], next: 3610000 },
+      { events: [ev(3611000)], next: 3620000 },
+    ]));
+
+    const result = await handleGetFightEvents(client, {
+      report_code: '8DPcRJd1LapWyr6A',
+      fight_id: 13,
+      max_pages: 2,
+    }) as FightEventsResult & { hasMore: boolean; nextPageToken: number | null; pagesFetched: number };
+
+    expect(result.pagesFetched).toBe(2);
+    expect(result.eventCount).toBe(2);
+    expect(result.hasMore).toBe(true);
+    expect(result.nextPageToken).toBe(3610000);
+  });
+
+  it('rejects a page token that is not an absolute timestamp in this fight', async () => {
+    const stub = stubClient(paged([{ events: [], next: null }]));
+
+    const result = await handleGetFightEvents(stub.client, {
+      report_code: '8DPcRJd1LapWyr6A',
+      fight_id: 13,
+      page_token: 60,
+    }) as { error: string };
+
+    expect(result.error).toBe('invalid_page_token');
+    expect(stub.callWith('FightEvents')).toBeUndefined();
+  });
+});

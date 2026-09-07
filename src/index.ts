@@ -75,7 +75,7 @@ This server queries the Warcraft Logs (WCL) GraphQL API to provide WoW performan
 - get_buff_uptime: Buff/debuff uptime tracking
 - get_combatant_info: Player setup (class, spec, details)
 - get_encounter_rankings: Parse rankings by encounter or zone
-- get_fight_events: Raw combat events for event-level analysis
+- get_fight_events: Raw combat events for event-level analysis (relative times, ability names, server-side source/target filters, pagination)
 
 ## Recommended Workflow
 1. Call set_active_character with the user's character
@@ -289,9 +289,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           report_code: { type: 'string', description: 'WCL report code' },
           fight_id: { type: 'number', description: 'Fight ID' },
           event_type: { type: 'string', enum: ['casts', 'damage-done', 'damage-taken', 'healing', 'buffs', 'debuffs', 'deaths'], description: 'Event type filter' },
-          source_name: { type: 'string', description: 'Filter by source player name' },
-          target_name: { type: 'string', description: 'Filter by target name' },
+          source_name: { type: 'string', description: 'Filter by source name (player or NPC), applied server-side. Includes the actor\'s pets, whose events carry sourceOwnerName.' },
+          target_name: { type: 'string', description: 'Filter by target name (player or NPC), applied server-side' },
           ability_id: { type: 'number', description: 'Filter by ability ID' },
+          page_token: { type: 'number', description: 'Resume from a previous response\'s nextPageToken' },
+          max_pages: { type: 'number', description: 'Pages to follow automatically (default 1, max 20)' },
         },
         required: ['report_code', 'fight_id'],
       },

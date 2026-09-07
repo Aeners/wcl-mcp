@@ -505,6 +505,37 @@ describe('Tool Integration Tests', () => {
       expect(result.events.some(e => typeof e.abilityName === 'string')).toBe(true);
     });
 
+    it('follows the cursor across pages', async () => {
+      const onePage = await handleGetFightEvents(client, {
+        report_code: reportCode,
+        fight_id: fightId,
+        event_type: 'damage-done',
+      }) as { eventCount: number; hasMore: boolean; nextPageToken: number | null; pagesFetched: number };
+
+      expect(onePage.pagesFetched).toBe(1);
+      if (!onePage.hasMore) return; // short fight, nothing to page through
+
+      expect(typeof onePage.nextPageToken).toBe('number');
+
+      const resumed = await handleGetFightEvents(client, {
+        report_code: reportCode,
+        fight_id: fightId,
+        event_type: 'damage-done',
+        page_token: onePage.nextPageToken!,
+      }) as { eventCount: number };
+      expect(resumed.eventCount).toBeGreaterThan(0);
+
+      const twoPages = await handleGetFightEvents(client, {
+        report_code: reportCode,
+        fight_id: fightId,
+        event_type: 'damage-done',
+        max_pages: 2,
+      }) as { eventCount: number; pagesFetched: number };
+
+      expect(twoPages.pagesFetched).toBe(2);
+      expect(twoPages.eventCount).toBeGreaterThan(onePage.eventCount);
+    }, 30_000);
+
     it('rejects an unknown source name instead of returning nothing', async () => {
       const result = await handleGetFightEvents(client, {
         report_code: reportCode,
