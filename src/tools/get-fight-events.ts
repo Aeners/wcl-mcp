@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { WCLClient, WCLError } from '../wcl/client.js';
 import { FIGHT_EVENTS_QUERY } from '../wcl/queries.js';
+import { withRelativeTime, type RawEvent } from '../formatters/events.js';
 import { logger } from '../utils/logger.js';
 import { authFailure, serviceUnavailable, type ToolError } from '../formatters/common.js';
 
@@ -144,11 +145,16 @@ export async function handleGetFightEvents(
       reportCode: args.report_code,
       fightId: args.fight_id,
       fightName: fight.name,
+      // T0. Every `relativeTime` below is seconds since this timestamp, so
+      // there is no need to reconstruct the pull from death events.
+      pullTimestamp: fight.startTime,
+      fightEndTimestamp: fight.endTime,
+      fightDurationMs: fight.endTime - fight.startTime,
       eventType: args.event_type ?? 'all',
       eventCount: events.length,
       hasMore: eventsData.reportData.report.events.nextPageTimestamp !== null,
       nextPageTimestamp: eventsData.reportData.report.events.nextPageTimestamp,
-      events,
+      events: withRelativeTime(events as RawEvent[], fight.startTime),
     };
   } catch (error) {
     const latencyMs = Date.now() - startTime;
